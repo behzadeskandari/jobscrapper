@@ -48,7 +48,8 @@ namespace JobvisionScraper
                 Console.WriteLine("Launching browser...");
                 browser = await Puppeteer.LaunchAsync(new LaunchOptions
                 {
-                    Headless = false, // Set true for production
+                    Headless = true, // Set true for production
+                    HeadlessMode = HeadlessMode.True,
                     Args = new[] { "--no-sandbox", "--disable-setuid-sandbox" }
                 });
                 Console.WriteLine("Browser launched successfully.");
@@ -158,13 +159,13 @@ namespace JobvisionScraper
             Console.WriteLine("Using fallback categories...");
             var fallbackNames = new[]
             {
-                "فروش و بازاریابی - سطوح کارشناسی و مدیریتی",
-                "فروش و بازاریابی - فروشنده / بازاریاب و ویزیتور / صندوقدار",
-                "مدیر فروشگاه / مدیر رستوران",
-                "خدمات و پشتیبانی مشتریان",
-                "نماینده علمی / مدرپ",
-                "مدیریت بیمه",
-                "دیجیتال مارکتینگ و سئو",
+                //"فروش و بازاریابی - سطوح کارشناسی و مدیریتی",
+                //"فروش و بازاریابی - فروشنده / بازاریاب و ویزیتور / صندوقدار",
+                //"مدیر فروشگاه / مدیر رستوران",
+                //"خدمات و پشتیبانی مشتریان",
+                //"نماینده علمی / مدرپ",
+                //"مدیریت بیمه",
+                //"دیجیتال مارکتینگ و سئو",
                 "ترجمه / تولید محتوا / نویسندگی و ویراستاری",
                 "توسعه نرم افزار و برنامه نویسی",
                 "تست نرم افزار",
