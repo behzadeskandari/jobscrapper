@@ -308,6 +308,7 @@ namespace JobvisionScraper
                 Console.WriteLine("HTML loaded into HtmlDocument for jobs.");
                 var jobNodes = doc.DocumentNode.SelectNodes("//job-card[contains(@class, 'ng-star-inserted')]");
                 Console.WriteLine($"Found {jobNodes?.Count ?? 0} job cards.");
+
                 if (jobNodes == null) return jobs;
                 foreach (var node in jobNodes) // Sequential jobs per page like original
                 {
