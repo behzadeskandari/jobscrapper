@@ -235,7 +235,7 @@ namespace JobvisionScraper
                 //"باریستا / کافی من / گارسون",
                 //"راهنمای تور / مهماندار",
                 //"ورزش / تربیت بدنی / تغذیه",
-                //"تاریخ / جغرافیا / باستان شناسی"
+                "تاریخ / جغرافیا / باستان شناسی"
             };
             return fallbackNames.Select(name => (name, GetSlugFromName(name))).ToList();
         }
