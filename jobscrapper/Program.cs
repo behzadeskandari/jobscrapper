@@ -10,7 +10,7 @@ using System.Threading;
 using System.Collections.Specialized;
 using HtmlAgilityPack;
 using PuppeteerSharp;
-using jobscrapper;
+using jobscrapper.Models;
 
 namespace JobvisionScraper
 {

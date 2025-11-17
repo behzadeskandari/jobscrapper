@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace jobscrapper
+namespace jobscrapper.Models
 {
     public class Job
     {
@@ -19,6 +19,7 @@ namespace jobscrapper
         public string Link { get; set; } = string.Empty;
         public DateTime ScrapedAt { get; set; } = DateTime.UtcNow;
         public string JobText { get; set; } = string.Empty; // Concat for ML
+        public string FullText => $"{Title} {ShortDescription}";
     }
 
 }

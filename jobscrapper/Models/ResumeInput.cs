@@ -4,14 +4,15 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace jobscrapper
+namespace jobscrapper.Models
 {
-    public class Resume
+    public class ResumeInput
     {
         public string FullText { get; set; } = "";
         public string Name { get; set; } = "";
         public string Education { get; set; } = "";
         public int YearsExperience { get; set; }
         public string City { get; set; } = "";
+        public string Skills { get; set; } = "";
     }
 }
