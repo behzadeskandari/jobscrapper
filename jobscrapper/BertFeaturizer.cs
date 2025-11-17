@@ -58,35 +58,103 @@ namespace jobscrapper
     // Simple tokenizer (expand with vocab.txt for WordPiece)
     public class SimpleBertTokenizer
     {
-        private readonly HashSet<string> _vocab = new();
-        public SimpleBertTokenizer(string vocabPath)
-        {
-            if (File.Exists(vocabPath))
-                _vocab = new HashSet<string>(File.ReadAllLines(vocabPath));
-            // Add common BERT tokens: [PAD], [UNK], [CLS], [SEP], [MASK]
-            _vocab.Add("[PAD]"); _vocab.Add("[UNK]"); _vocab.Add("[CLS]"); _vocab.Add("[SEP]"); _vocab.Add("[MASK]");
-        }
+        /// <summary>
+        /// Lightweight BERT tokenizer using a pre-loaded vocab file.
+        /// Supports [CLS], [SEP], [PAD], [UNK], [MASK].
+        /// Returns int64 arrays required by ONNX BERT models.
+        /// </summary>
+      
+            private readonly List<string> _vocab; // Ordered list for fast IndexOf
+            private readonly Dictionary<string, long> _tokenToId; // Fast lookup
 
-        public (long[] Ids, long[] AttentionMask) Encode(string text, int maxLength)
-        {
-            // Basic tokenization (improve with WordPiece for accuracy)
-            var tokens = new List<string> { "[CLS]" };
-            tokens.AddRange(text.ToLower().Split(' ', StringSplitOptions.RemoveEmptyEntries).Where(w => w.Length > 1));
-            tokens.Add("[SEP]");
-
-            var ids = tokens.Select(t => _vocab.Contains(t) ? Array.IndexOf(_vocab.ToArray(), t) : 100 /* [UNK] id */).ToArray();
-            var mask = Enumerable.Repeat(1L, ids.Length).ToArray();
-
-            // Pad/truncate
-            if (ids.Length > maxLength) { ids = ids.Take(maxLength).ToArray(); mask = mask.Take(maxLength).ToArray(); }
-            else
+            public SimpleBertTokenizer(string vocabPath)
             {
-                var padSize = maxLength - ids.Length;
-                Array.Resize(ref ids, maxLength); Array.Fill(ids, 0L, ids.Length - padSize, padSize);  // Pad with 0
-                Array.Resize(ref mask, maxLength); Array.Fill(mask, 0L, mask.Length - padSize, padSize);
+                if (!File.Exists(vocabPath))
+                    throw new FileNotFoundException($"Vocab file not found: {vocabPath}");
+
+                // Load vocab in order
+                _vocab = File.ReadAllLines(vocabPath).Select(line => line.Trim()).ToList();
+
+                // Ensure special tokens exist
+                EnsureSpecialToken("[PAD]", 0);
+                EnsureSpecialToken("[UNK]", 100);
+                EnsureSpecialToken("[CLS]", 101);
+                EnsureSpecialToken("[SEP]", 102);
+                EnsureSpecialToken("[MASK]", 103);
+
+                // Build reverse lookup
+                _tokenToId = _vocab.Select((token, index) => new { token, index })
+                                  .ToDictionary(x => x.token, x => (long)x.index);
             }
 
-            return (ids.Select(long.Parse).ToArray(), mask);  // Cast to long[]
-        }
+            private void EnsureSpecialToken(string token, int expectedId)
+            {
+                if (!_vocab.Contains(token))
+                {
+                    if (_vocab.Count <= expectedId)
+                        _vocab.Insert(expectedId, token);
+                    else
+                        _vocab[expectedId] = token;
+                }
+            }
+
+            /// <summary>
+            /// Encodes text into BERT input IDs and attention mask.
+            /// </summary>
+            /// <param name="text">Input text</param>
+            /// <param name="maxLength">Max sequence length (e.g., 128)</param>
+            /// <returns>(inputIds: long[], attentionMask: long[])</returns>
+            public (long[] Ids, long[] AttentionMask) Encode(string text, int maxLength = 128)
+            {
+                if (string.IsNullOrWhiteSpace(text))
+                    text = "";
+
+                // Step 1: Basic word splitting (lower-case)
+                var words = text.ToLowerInvariant()
+                                .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                                .Where(w => w.Length > 0)
+                                .ToList();
+
+                // Step 2: Build token list: [CLS] + words + [SEP]
+                var tokens = new List<string> { "[CLS]" };
+                tokens.AddRange(words);
+                tokens.Add("[SEP]");
+
+                // Step 3: Convert to IDs (use [UNK] if missing)
+                var idsList = new List<long>();
+                foreach (var token in tokens)
+                {
+                    idsList.Add(_tokenToId.TryGetValue(token, out var id) ? id : _tokenToId["[UNK]"]);
+                }
+
+                // Step 4: Truncate if too long
+                if (idsList.Count > maxLength)
+                {
+                    idsList = idsList.Take(maxLength).ToList();
+                }
+
+                // Step 5: Pad to maxLength
+                int currentLength = idsList.Count;
+                int padSize = maxLength - currentLength;
+
+                var inputIds = new long[maxLength];
+                var attentionMask = new long[maxLength];
+
+                // Copy real tokens
+                for (int i = 0; i < currentLength; i++)
+                {
+                    inputIds[i] = idsList[i];
+                    attentionMask[i] = 1;
+                }
+
+                // Pad with 0s
+                for (int i = currentLength; i < maxLength; i++)
+                {
+                    inputIds[i] = 0; // [PAD]
+                    attentionMask[i] = 0;
+                }
+
+                return (inputIds, attentionMask);
+            }
     }
 }
