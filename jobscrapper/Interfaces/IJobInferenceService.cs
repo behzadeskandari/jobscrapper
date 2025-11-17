@@ -9,21 +9,17 @@ namespace jobscrapper.Interfaces
 {
     public interface IJobInferenceService
     {
-        List<JobSample> LoadJsonl(string path);
-
-        // --- Training ---
+        List<JobSample> LoadAllJobSamples(string path);
         void TrainCategoryModel(List<JobSample> data);
         void TrainAnswerModels(List<JobSample> data);
-
-        // --- Save / Load ---
         void SaveCategoryModel(string path);
-        void SaveCategoryAndAnswerModels(string folder);
-
+        void SaveAnswerModels(string folder);
         void LoadCategoryModel(string path);
         void LoadAnswerModels(string folder);
-
-        // --- Inference ---
         string PredictJobCategory(string question);
         string PredictAnswer(string question);
+
+        void SaveCategoryAndAnswerModels(string folder);
+        List<MatchResult> PredictMatches(ResumeInput resume, int topN);
     }
 }

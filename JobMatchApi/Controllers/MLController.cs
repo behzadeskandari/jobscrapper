@@ -18,7 +18,7 @@ namespace JobMatchApi.Controllers
         [HttpPost("train")]
         public IActionResult Train([FromBody] string jsonlPath)
         {
-            var data = _ml.LoadJsonl(jsonlPath);
+            var data = _ml.LoadAllJobSamples(jsonlPath);
 
             _ml.TrainCategoryModel(data);
             _ml.TrainAnswerModels(data);
