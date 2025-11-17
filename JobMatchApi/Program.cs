@@ -40,8 +40,8 @@
 //    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
 //}
 // JobMatchApi/Program.cs
-using JobMatchMLNet.Models;
-using JobMatchMLNet.Services;
+
+using jobscrapper.Models;
 using jobscrapper.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -87,7 +87,7 @@ app.MapPost("/api/resume/match", async (IFormFile resumeFile, JobMatcher matcher
 
     // Clean up
     File.Delete(tempPath);
-
+    
     // Predict
     var matches = matcher.Predict(resume, topN);
 
