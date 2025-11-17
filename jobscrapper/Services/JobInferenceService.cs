@@ -92,24 +92,65 @@ namespace jobscrapper.Services
         public void TrainCategoryModel(List<JobSample> data)
         {
 
-            var ml = new MLContext();
+            if (data == null || !data.Any())
+                throw new ArgumentException("Training data is empty.");
 
-            var dataView = ml.Data.LoadFromEnumerable(data);
+            var dv = _ml.Data.LoadFromEnumerable(data);
 
-            var pipeline = ml.Transforms.Text.FeaturizeText(
-                                outputColumnName: "Features",
-                                inputColumnName: nameof(JobSample.Question))
-                            .Append(ml.Transforms.Conversion.MapValueToKey("Label", nameof(JobSample.Category)))
-                            .Append(ml.MulticlassClassification.Trainers.SdcaMaximumEntropy(
-                                featureColumnName: "Features",
-                                labelColumnName: "Label"))
-                            .Append(ml.Transforms.Conversion.MapKeyToValue("PredictedLabel"));
+            // FIXED: Correct overload + options + pipeline order
+            var pipeline = _ml.Transforms.Text
+                .FeaturizeText(
+                    outputColumnName: "Features",  // Output
+                    options: new TextFeaturizingEstimator.Options
+                    {
+                        // Persian-optimized settings
+                        KeepDiacritics = false,           // Remove accents (اِ → ا)
+                        KeepPunctuations = false,         // Remove punctuation
+                        KeepNumbers = true,               // Keep numbers
+                        CaseMode = TextNormalizingEstimator.CaseMode.Lower,  // Lowercase
 
-            var model = pipeline.Fit(dataView);
+                        // Char n-grams for Persian (3-grams = best)
+                        CharFeatureExtractor = new WordBagEstimator.Options
+                        {
+                            NgramLength = 3,
+                            UseAllLengths = true,             // 1-grams + 2-grams + 3-grams
+                            MaximumNgramsCount = new[] { 100_000 }
+                        },
 
-            _catEngine = ml.Model.CreatePredictionEngine<JobSample, CategoryPrediction>(model);
+                        // Word bigrams (helps vocabulary)
+                        WordFeatureExtractor = new WordBagEstimator.Options
+                        {
+                            NgramLength = 2,
+                            UseAllLengths = true,
+                            MaximumNgramsCount = new[] { 50_000 }
+                        },
 
-            Console.WriteLine("Model trained successfully (multiclass text classifier).");
+                        // Vector normalization (L2 = unit norm)
+                        Norm = TextFeaturizingEstimator.NormFunction.L2
+                    },
+                    inputColumnNames: nameof(JobSample.Question)  // Input
+                )
+
+                // FIXED: Label mapping AFTER featurization
+                .Append(_ml.Transforms.Conversion.MapValueToKey(
+                    outputColumnName: "Label",
+                    inputColumnName: nameof(JobSample.Category)))
+
+                // Train multiclass classifier
+                .Append(_ml.MulticlassClassification.Trainers.SdcaMaximumEntropy(
+                    labelColumnName: "Label",
+                    featureColumnName: "Features",
+                    maximumNumberOfIterations: 100))
+
+                // Convert predicted key back to category name
+                .Append(_ml.Transforms.Conversion.MapKeyToValue(
+                    outputColumnName: "PredictedLabel",
+                    inputColumnName: "PredictedLabel"));
+
+            _categoryModel = pipeline.Fit(dv);
+            _catEngine = _ml.Model.CreatePredictionEngine<JobSample, CategoryPrediction>(_categoryModel);
+
+            Console.WriteLine($"Category model trained on {data.Count} samples across {data.Select(x => x.Category).Distinct().Count()} categories.");
         } // ------------------------------------------------------------
         // 3. Train Answer Models (One per Category)
         // ------------------------------------------------------------
@@ -226,7 +267,7 @@ namespace jobscrapper.Services
 
             var input = new JobSample { Question = question };
             var prediction = _catEngine.Predict(input);
-            return prediction.PredictedLabel ?? "unknown";
+            return prediction.Category ?? "unknown";
         }
 
         public string PredictAnswer(string question)
