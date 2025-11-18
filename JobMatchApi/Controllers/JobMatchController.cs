@@ -1,4 +1,5 @@
-﻿using JobMatchApi.Services;
+﻿using System.Text.RegularExpressions;
+using JobMatchApi.Services;
 using jobscrapper.Interfaces;
 using jobscrapper.Models;
 using jobscrapper.Services;
@@ -10,18 +11,13 @@ namespace JobMatchApi.Controllers
     [Route("api/[controller]")]
     public class JobMatchController : ControllerBase
     {
-        //private readonly JobPredictor _predictor;
-        //// DI – predictor is a singleton (models are heavy)
-        //public JobMatchController(JobPredictor predictor)
-        //{
-        //    _predictor = predictor;
-        //}
         private readonly IJobInferenceService _inference;
 
         public JobMatchController(IJobInferenceService inference)
         {
             _inference = inference;
         }
+
         /// <summary>
         /// Upload a PDF resume and get the best matching jobs.
         /// </summary>
@@ -36,7 +32,6 @@ namespace JobMatchApi.Controllers
             IFormFile file,
             [FromQuery] int topN = 5)
         {
-            // 1. Validate file
             if (file == null || file.Length == 0)
                 return BadRequest("No file uploaded.");
 
@@ -46,23 +41,19 @@ namespace JobMatchApi.Controllers
             if (file.Length > 5 * 1024 * 1024)
                 return BadRequest("File size exceeds 5 MB.");
 
-            // 2. Save to temp file
             var tempPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid()}.pdf");
 
             await using (var stream = System.IO.File.Create(tempPath))
             {
                 await file.CopyToAsync(stream);
-                // Stream is properly flushed and closed after this block
             }
 
             try
             {
-                // 3. Extract text from PDF (file is fully closed, so no lock)
                 var resumeText = PdfParser.Extract(tempPath);
                 if (string.IsNullOrWhiteSpace(resumeText.Name))
                     return BadRequest("Could not extract text from the PDF.");
 
-                // 4. Predict matches
                 var resumeInput = new ResumeInput { FullText = resumeText.FullText };
                 var matches = _inference.PredictMatches(resumeInput, topN);
 
@@ -70,15 +61,17 @@ namespace JobMatchApi.Controllers
             }
             finally
             {
-                // 5. Clean up temp file
                 if (System.IO.File.Exists(tempPath))
                     System.IO.File.Delete(tempPath);
             }
         }
 
-
-
-
+        /// <summary>
+        /// Upload a PDF resume and get the best matching jobs with details.
+        /// </summary>
+        /// <param name="request">Resume upload request containing the PDF file</param>
+        /// <param name="topN">How many job matches to return (default 5)</param>
+        /// <returns>Resume info and list of matched jobs</returns>
         [HttpPost("match2")]
         [IgnoreAntiforgeryToken]
         [Consumes("multipart/form-data")]
@@ -97,26 +90,35 @@ namespace JobMatchApi.Controllers
             if (file.Length > 10 * 1024 * 1024)
                 return BadRequest("حجم فایل بیش از حد مجاز است (حداکثر 10 مگابایت).");
 
-
             var tempPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid()}.pdf");
 
             try
             {
-                // 2. Save to temp file
-
                 await using (var stream = System.IO.File.Create(tempPath))
                 {
                     await file.CopyToAsync(stream);
-                    // Stream is properly flushed and closed after this block
                 }
-
 
                 var resume = PdfParser.Extract(tempPath);
 
                 if (string.IsNullOrWhiteSpace(resume.FullText) || resume.FullText.Length < 50)
                     return BadRequest("متن قابل خواندنی از PDF استخراج نشد.");
 
+                // Get prediction matches (likely returns list of MatchResult with Category info)
                 var matches = _inference.PredictMatches(resume, topN);
+
+                // Load all jobs from data source (adjust the path as needed)
+                var dataFolder = Path.Combine(AppContext.BaseDirectory, "data");
+                var allJobs = _inference.LoadAllJobSamples(dataFolder);
+
+                // Extract categories from match results
+                var matchedCategories = matches.Select(m => m.Category).ToHashSet();
+
+                // Filter jobs by matched categories
+                var filteredJobs = allJobs.Where(job => matchedCategories.Contains(job.Category)).ToList();
+
+                // Take top N jobs (or all if fewer)
+                var topJobs = filteredJobs.Take(topN).ToList();
 
                 var preview = resume.FullText.Length > 300
                     ? resume.FullText[..300] + "..."
@@ -134,7 +136,13 @@ namespace JobMatchApi.Controllers
                         skills = resume.Skills,
                         textPreview = preview
                     },
-                    jobMatches = matches
+                    jobMatches = topJobs.Select(job => new
+                    {
+                        title = job.Question,
+                        category = job.Category,
+                        description = job.Answer,  // if this contains description or summary
+                        link = ExtractLinkFromAnswer(job.Answer) // optional helper to parse URL from Answer text
+                    })
                 });
             }
             catch (Exception ex)
@@ -147,5 +155,20 @@ namespace JobMatchApi.Controllers
                     System.IO.File.Delete(tempPath);
             }
         }
+
+
+        public static string ExtractLinkFromAnswer(string answer)
+        {
+            if (string.IsNullOrWhiteSpace(answer))
+                return string.Empty;
+
+            // Regex pattern to find URLs starting with http or https
+            var urlPattern = @"https?://[^\s]+";
+
+            var match = Regex.Match(answer, urlPattern, RegexOptions.IgnoreCase);
+
+            return match.Success ? match.Value : string.Empty;
+        }
     }
+
 }
