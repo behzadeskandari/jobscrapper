@@ -6,9 +6,10 @@ using jobscrapper.Models;
 using jobscrapper.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.ML;
+using Microsoft.OpenApi.Models;
 
 var builder = WebApplication.CreateBuilder(args);
-
+builder.Services.AddControllers();
 // ---------- Services ----------
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
@@ -30,35 +31,30 @@ var isTrainMode = argsList.Contains("train");
 await using (var scope = app.Services.CreateAsyncScope())
 {
     var inference = scope.ServiceProvider.GetRequiredService<IJobInferenceService>();
-
     var baseDir = AppContext.BaseDirectory;
     var dataFolder = Path.Combine(baseDir, "Data");
     var modelsFolder = Path.Combine(baseDir, "Models");
-    var catModelPath = Path.Combine(modelsFolder, "category.zip");
+    var catModelPath = Path.Combine(modelsFolder, "category_classifier.zip");  // Changed to match save method
 
     Directory.CreateDirectory(modelsFolder);
 
     if (!File.Exists(catModelPath))
     {
         Console.WriteLine("Training mode: Loading all Persian JSONL files...");
-
-        var allData = inference.LoadAllJobSamples(dataFolder);
-
+        var allData = inference.LoadAllJobSamples(dataFolder);  // Now loads 9600 samples!
         inference.TrainCategoryModel(allData);
-        inference.TrainAnswerModels(allData);
-        inference.SaveCategoryAndAnswerModels(modelsFolder);
-
+        inference.TrainPerCategoryModels(allData);  // New: Trains model_*.zip
+        inference.SaveCategoryAndPerCategoryModels(modelsFolder);  // Combined save
         Console.WriteLine("All models trained and saved!");
     }
     else
     {
         Console.WriteLine("Inference mode: Loading saved models...");
         inference.LoadCategoryModel(catModelPath);
-        inference.LoadAnswerModels(modelsFolder);
+        inference.LoadPerCategoryModels(modelsFolder);  // New: Loads model_*.zip
         Console.WriteLine("Ready for resume matching!");
     }
 }
-
 // ---------- 2. Middleware ----------
 if (app.Environment.IsDevelopment())
 {
@@ -67,25 +63,33 @@ if (app.Environment.IsDevelopment())
     {
         c.SwaggerEndpoint("/swagger/v1/swagger.json", "JobScrapper API v1");
         c.RoutePrefix = "swagger";
+        c.DocumentTitle = "JobScrapper AI - Persian Resume Matcher";
+        c.DefaultModelsExpandDepth(-1); // مخفی کردن schemaها برای تمیزی
     });
 }
 
 app.UseHttpsRedirection();
-
+app.MapControllers();       
+app.UseRouting();
 // ---------- 3. API Endpoint ----------
 app.MapPost("/api/resume/match", async (
+        HttpContext context,
         IFormFile file,
-        IJobInferenceService inference,
         [FromQuery] int topN = 5) =>
 {
+    var inference = context.RequestServices.GetRequiredService<IJobInferenceService>();
+
     if (file == null || file.Length == 0)
         return Results.BadRequest("No file uploaded.");
+
     if (!file.FileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
         return Results.BadRequest("Only PDF files allowed.");
+
     if (file.Length > 5 * 1024 * 1024)
         return Results.BadRequest("File too large (max 5 MB).");
 
     var tempPath = Path.GetTempFileName() + ".pdf";
+
     try
     {
         using (var stream = File.Create(tempPath))
@@ -95,7 +99,6 @@ app.MapPost("/api/resume/match", async (
         if (string.IsNullOrWhiteSpace(resume.FullText))
             return Results.BadRequest("Failed to extract text from PDF.");
 
-        // Predict using loaded models (no JSONL read)
         var matches = inference.PredictMatches(resume, topN);
 
         var preview = resume.FullText.Length > 200
@@ -119,12 +122,19 @@ app.MapPost("/api/resume/match", async (
     }
     finally
     {
-        if (File.Exists(tempPath)) File.Delete(tempPath);
+        if (File.Exists(tempPath))
+            File.Delete(tempPath);
     }
 })
 .WithName("MatchResume")
+.WithOpenApi(operation => new(operation)
+{
+    Summary = "Upload a resume (PDF) and get best job matches using AI",
+    Description = "Extracts text from Persian PDF resumes and returns top job matches based on trained ML models.",
+    Tags = new[] { new OpenApiTag { Name = "Resume Matching" } }
+})
 .Accepts<IFormFile>("multipart/form-data")
 .Produces<object>(200)
+.ProducesProblem(400)
 .ProducesProblem(500);
-
 app.Run();

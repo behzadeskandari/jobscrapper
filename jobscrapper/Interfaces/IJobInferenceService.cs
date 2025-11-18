@@ -21,5 +21,16 @@ namespace jobscrapper.Interfaces
 
         void SaveCategoryAndAnswerModels(string folder);
         List<MatchResult> PredictMatches(ResumeInput resume, int topN);
+
+        void TrainPerCategoryModels(List<JobSample> data);  // New: Trains model_*.zip per category
+
+        void SavePerCategoryModels(string folder);  // Saves model_*.zip
+
+        void SaveCategoryAndPerCategoryModels(string folder);  // Combined save
+
+        void LoadPerCategoryModels(string folder);  // Loads model_*.zip
+
+
+
     }
 }
