@@ -13,6 +13,6 @@ namespace jobscrapper.Models
         public string Education { get; set; } = "";
         public int YearsExperience { get; set; }
         public string City { get; set; } = "";
-        public string Skills { get; set; } = "";
+        public List<string> Skills { get; set; } = new();
     }
 }

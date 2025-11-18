@@ -49,164 +49,144 @@ using PdfSharpCore.Pdf;
 using PdfSharpCore.Pdf.Content;
 using PdfSharpCore.Pdf.Content.Objects;
 using PdfSharpCore.Pdf.IO;
-
-public static partial class PdfParser
+public static class PdfParser
 {
     public static ResumeInput Extract(string pdfPath)
     {
-        if (string.IsNullOrWhiteSpace(pdfPath) || !File.Exists(pdfPath))
-            throw new FileNotFoundException($"PDF not found: {pdfPath}");
+        var fullText = new StringBuilder();
 
-        var doc = PdfReader.Open(pdfPath, PdfDocumentOpenMode.ReadOnly);
-        var sb = new StringBuilder();
+        try
+        {
+            using var document = PdfReader.Open(pdfPath, PdfDocumentOpenMode.ReadOnly);
 
-        foreach (PdfPage page in doc.Pages)
-            sb.Append(page.GetText());
+            foreach (PdfPage page in document.Pages)
+            {
+                var content = ContentReader.ReadContent(page);
+                var rawText = ExtractRawText(content);
 
-        string raw = sb.ToString();
-        string clean = CleanText(raw);
+                // این خط طلایی است: کاراکترهای خراب فارسی رو درست می‌کنه
+                var fixedText = FixPersianGarbage(rawText);
+                fullText.AppendLine(fixedText);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"خطا در خواندن PDF: {ex.Message}");
+            fullText.Append("خطا در خواندن فایل PDF");
+        }
 
-        var sections = ExtractSections(clean);
-        string name = ExtractName(clean);
-        int years = ExtractYearsExperience(clean);
-        string city = ExtractCity(clean);
+        var extractedText = fullText.ToString();
 
         return new ResumeInput
         {
-            FullText = clean,
-            Name = name,
-            Education = sections.GetValueOrDefault("Education", ""),
-            YearsExperience = years,
-            City = city,
-            Skills = sections.GetValueOrDefault("Skills", "")
+            FullText = extractedText,
+            Name = ExtractName(extractedText),
+            City = ExtractCity(extractedText),
+            YearsExperience = ExtractExperience(extractedText),
+            Skills = ExtractSkills(extractedText),
+            Education = ExtractEducation(extractedText)
         };
     }
 
-    // --------------------------------------------------------------
-    // 1. Clean text
-    // --------------------------------------------------------------
-    private static string CleanText(string input) =>
-        Regex.Replace(input, @"\s+", " ").Trim();
-
-    // --------------------------------------------------------------
-    // 2. Extract Name (first line or "Name:" pattern)
-    // --------------------------------------------------------------
-    private static string ExtractName(string text)
+    private static string ExtractRawText(CSequence content)
     {
-        // Try: "Name: John Doe"
-        var m = Regex.Match(text, @"Name\s*[:\-]?\s*([A-Za-z\s\.]+)", RegexOptions.IgnoreCase);
-        if (m.Success) return m.Groups[1].Value.Trim();
-
-        // Fallback: first non-empty line (often the name)
-        var firstLine = text.Split('\n', StringSplitOptions.RemoveEmptyEntries)
-                            .FirstOrDefault();
-        return firstLine?.Trim() ?? "";
-    }
-
-    // --------------------------------------------------------------
-    // 3. Extract Years of Experience
-    // --------------------------------------------------------------
-    private static int ExtractYearsExperience(string text)
-    {
-        // Match: "5 years", "3+ years", "10 yrs", "8-year experience"
-        var patterns = new[]
+        var sb = new StringBuilder();
+        foreach (var cObject in content)
         {
-                @"\b(\d{1,2})\+?\s*(?:years?|yrs?)\b",
-                @"(\d{1,2})\-year",
-                @"(\d{1,2})\s*years?\s*(?:of\s*)?experience"
-            };
-
-        foreach (var p in patterns)
-        {
-            var m = Regex.Match(text, p, RegexOptions.IgnoreCase);
-            if (m.Success && int.TryParse(m.Groups[1].Value, out int years))
-                return years;
-        }
-        return 0;
-    }
-
-    // --------------------------------------------------------------
-    // 4. Extract City (from address or "Location: Berlin")
-    // --------------------------------------------------------------
-    private static string ExtractCity(string text)
-    {
-        // Try: "Location: Berlin", "City: Munich"
-        var m = Regex.Match(text, @"(?:Location|City)[:\-]?\s*([A-Za-z\s\-]+)", RegexOptions.IgnoreCase);
-        if (m.Success) return m.Groups[1].Value.Trim();
-
-        // Fallback: look for German cities in text
-        var cities = new[] { "Berlin", "Munich", "Hamburg", "Cologne", "Frankfurt", "Stuttgart", "Düsseldorf", "Dortmund", "Essen", "Leipzig" };
-        foreach (var city in cities)
-            if (text.Contains(city, StringComparison.OrdinalIgnoreCase))
-                return city;
-
-        return "";
-    }
-
-    // --------------------------------------------------------------
-    // 5. Extract Sections (Skills, Education, etc.)
-    // --------------------------------------------------------------
-    private static Dictionary<string, string> ExtractSections(string text)
-    {
-        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var sections = new[] { "Skills", "Education", "Experience", "Summary" };
-
-        foreach (var sec in sections)
-        {
-            var pattern = $@"{Regex.Escape(sec)}\s*[:\-]?\s*(.*?)(?=\n[A-Z]{{2,}}[:\-]|$)";
-            var m = Regex.Match(text, pattern, RegexOptions.IgnoreCase | RegexOptions.Singleline);
-            result[sec] = m.Success
-                ? m.Groups[1].Value.Replace("\n", " ").Trim()
-                : "";
-        }
-        return result;
-    }
-
-    // --------------------------------------------------------------
-    // 6. Safe page text extraction
-    // --------------------------------------------------------------
-    private static string GetText(this PdfPage page)
-    {
-        try
-        {
-            // Read the content stream of the page
-            var content = ContentReader.ReadContent(page);
-            if (content == null) return "";
-
-            var text = new StringBuilder();
-
-            // Iterate through all content objects (CObject)
-            foreach (var cObject in content)
+            if (cObject is COperator cOp && (cOp.OpCode.Name == "Tj" || cOp.OpCode.Name == "TJ"))
             {
-                if (cObject is COperator op)
+                foreach (var operand in cOp.Operands)
                 {
-                    // Look for text-showing operators: Tj, TJ, ', "
-                    if (op.OpCode.Name is "Tj" or "TJ" or "'" or "\"")
+                    if (operand is CString cString)
                     {
-                        // The operand before the operator is the text
-                        if (op.Operands.Count > 0 && op.Operands[0] is CString cString)
-                        {
-                            text.Append(cString.Value);
-                        }
-                        else if (op.Operands.Count > 0 && op.Operands[0] is CArray cArray)
-                        {
-                            // TJ operator may contain array of strings and spacing
-                            foreach (var item in cArray)
-                            {
-                                if (item is CString str)
-                                    text.Append(str.Value);
-                                // Ignore numbers (kerning/spacing)
-                            }
-                        }
+                        sb.Append(cString.Value);
+                    }
+                    else if (operand is CArray cArray)
+                    {
+                        foreach (var item in cArray)
+                            if (item is CString arrStr)
+                                sb.Append(arrStr.Value);
                     }
                 }
             }
-
-            return text.ToString();
         }
-        catch
-        {
-            return "";
-        }
+        return sb.ToString();
     }
+
+    // این متد کاراکترهای خراب فارسی (مثل \u0003) رو به حروف فارسی تبدیل می‌کنه
+    private static string FixPersianGarbage(string input)
+    {
+        if (string.IsNullOrEmpty(input)) return input;
+
+        var map = new Dictionary<string, string>
+        {
+            // مثال برای کاراکترهای خراب رایج در PDF فارسی
+            {"\u0003", " "}, {"\u0001", ""}, {"\u0002", ""}, {"\u000f", ""},
+            {"\u001e", ""}, {"\u001a", ""}, {"\u0010", ""}, {"\u007f", ""},
+            // تبدیل کاراکترهای خراب به فارسی (بر اساس تجربه واقعی)
+            {"\uFB56", "پ"}, {"\uFB58", "ت"}, {"\uFB7A", "چ"}, {"\uFB8A", "ک"},
+            {"\uFB66", "ژ"}, {"\uFB90", "گ"}, {"\u064A", "ی"}, {"\u0649", "ی"},
+            {"\u0624", "ؤ"}, {"\u0626", "ئ"}, {"\u0622", "آ"}, {"\u0623", "أ"}
+        };
+
+        var result = input;
+        foreach (var kvp in map)
+            result = result.Replace(kvp.Key, kvp.Value, StringComparison.Ordinal);
+
+        // حذف کاراکترهای غیرقابل چاپ
+        result = Regex.Replace(result, @"\p{C}+", " ");
+
+        return result;
+    }
+
+    private static string ExtractName(string text)
+    {
+        var patterns = new[]
+        {
+            @"نام\s*و\s*نام\s*خانوادگی\s*[:\-]?\s*([\u0600-\u06FF\s]{5,40})",
+            @"نام\s*[:\-]?\s*([\u0600-\u06FF\s]{5,40})",
+            @"^([\u0600-\u06FF]{3,20}\s+[\u0600-\u06FF]{3,20})"
+        };
+
+        foreach (var p in patterns)
+        {
+            var m = Regex.Match(text, p, RegexOptions.Multiline);
+            if (m.Success && m.Groups.Count > 1)
+            {
+                var name = Clean(m.Groups[1].Value);
+                if (name.Length >= 5 && name.Contains(" ")) return name;
+            }
+        }
+        return "نامشخص";
+    }
+
+    private static string ExtractCity(string text)
+    {
+        var cities = new[] { "تهران", "مشهد", "اصفهان", "شیراز", "تبریز", "کرج", "اهواز", "قم", "کرمانشاه", "رشت", "ارومیه", "زاهدان" };
+        foreach (var city in cities)
+            if (text.Contains(city)) return city;
+        return "نامشخص";
+    }
+
+    private static int ExtractExperience(string text)
+    {
+        var m = Regex.Match(text, @"(\d{1,2})\s*(سال|ساله|سال‌ها)\s*(تجربه|سابقه)", RegexOptions.IgnoreCase);
+        return m.Success && int.TryParse(m.Groups[1].Value, out var y) ? y : 0;
+    }
+
+    private static List<string> ExtractSkills(string text)
+    {
+        var skills = new[] { "پایتون", "Python", "React", "ری‌اکت", "جاوااسکریپت", "C#", ".NET", "SQL", "فوتوشاپ", "حسابداری", "پرستاری", "رانندگی", "Excel" };
+        return skills.Where(s => text.Contains(s, StringComparison.OrdinalIgnoreCase)).ToList();
+    }
+
+    private static string ExtractEducation(string text)
+    {
+        if (text.Contains("دکتری")) return "دکتری";
+        if (text.Contains("کارشناسی ارشد") || text.Contains("فوق لیسانس")) return "کارشناسی ارشد";
+        if (text.Contains("کارشناسی") || text.Contains("لیسانس")) return "کارشناسی";
+        return "نامشخص";
+    }
+
+    private static string Clean(string input) => Regex.Replace(input.Trim(), @"\s+", " ");
 }
