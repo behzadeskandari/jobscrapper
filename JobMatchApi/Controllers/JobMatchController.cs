@@ -79,7 +79,7 @@ namespace JobMatchApi.Controllers
            [FromForm] ResumeUploadRequest request,
            [FromQuery] int topN = 5)
         {
-            
+
 
             if (request.File == null || request.File.Length == 0)
                 return BadRequest("فایلی آپلود نشده است.");
@@ -91,43 +91,62 @@ namespace JobMatchApi.Controllers
 
             try
             {
-                // ذخیره فایل
-                using (var stream = System.IO.File.Create(tempPath))
+                await using (var stream = System.IO.File.Create(tempPath))
+                {
                     await request.File.CopyToAsync(stream);
+                }
 
-                // این خط طلایی است — خودش تشخیص می‌ده فارسی یا انگلیسی!
                 var resume = PdfParser.Extract(tempPath);
 
-                var language = resume.FullText.Any(c => c >= 0x0600 && c <= 0x06FF) ? "فارسی" : "انگلیسی";
+                if (string.IsNullOrWhiteSpace(resume.FullText) || resume.FullText.Length < 50)
+                    return BadRequest("متن قابل خواندنی از PDF استخراج نشد.");
 
-                List<MatchResult> matches;
-                if (language == "فارسی")
+                // 1. دسته بندی اصلی رزومه با مدل
+                var category = _inference.PredictJobCategory(resume.FullText);
+
+                // 2. بارگذاری همه مشاغل (یکبار بهتر است این کار خارج از این متد انجام شود و داده کش شود)
+                var jobsDataPath = Path.Combine(AppContext.BaseDirectory, "Data");
+                var allJobs = _inference.LoadAllJobSamples(jobsDataPath);
+
+                // 3. فیلتر کردن مشاغل فقط روی دسته‌بندی پیش‌بینی شده
+                var filteredJobs = allJobs.Where(job => job.Category == category).ToList();
+
+                // 4. مرتب سازی بر اساس تشابه ساده (تعداد کلمات مشترک)
+                var resumeWords = new HashSet<string>(resume.FullText.ToLower().Split(' ', StringSplitOptions.RemoveEmptyEntries));
+                var rankedJobs = filteredJobs.Select(job =>
                 {
-                    matches = _inference.PredictMatchesPersian(resume, topN);
-                }
-                else
-                {
-                    matches = _inference.PredictMatchesEnglish(resume, topN);
-                }
+                    var jobWords = new HashSet<string>(job.Question.ToLower().Split(' ', StringSplitOptions.RemoveEmptyEntries));
+                    int commonWordsCount = resumeWords.Intersect(jobWords).Count();
+                    return new { Job = job, Score = commonWordsCount };
+                })
+ .OrderByDescending(x => x.Score)
+ .Take(topN)
+ .Select(x => x.Job)
+ .ToList();
 
-                var preview = resume.FullText.Length > 300
-                    ? resume.FullText[..300] + "..."
-                    : resume.FullText;
+                var preview = resume.FullText.Length > 300 ? resume.FullText[..300] + "..." : resume.FullText;
 
+                // 5. خروجی مناسب با جزئیات بیشتر
                 return Ok(new
                 {
                     message = "رزومه با موفقیت پردازش شد",
-                    language = resume.FullText.Any(c => c >= 0x0600 && c <= 0x06FF) ? "فارسی" : "English",
                     extracted = new
                     {
-                        resume.Name,
-                        resume.City,
-                        resume.YearsExperience,
-                        resume.Education,
-                        resume.Skills,
+                        name = resume.Name,
+                        city = resume.City,
+                        yearsExperience = resume.YearsExperience,
+                        education = resume.Education,
+                        skills = resume.Skills,
                         textPreview = preview
                     },
-                    jobMatches = matches
+                    jobMatches = rankedJobs.Select(job => new
+                    {
+                        title = job.Answer,  // معمولا عنوان شغل در Answer ذخیره میشه
+                        category = job.Category,
+                        description = job.Question,
+                        location = "نامشخص",  // اگر داری جایگاه مکانی اضافه کن
+                        link = "نامشخص"  // اگر لینک داری اضافه کن
+                    })
                 });
             }
             catch (Exception ex)

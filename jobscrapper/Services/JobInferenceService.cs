@@ -18,7 +18,7 @@ namespace jobscrapper.Services
     public class JobInferenceService : IJobInferenceService
     {
         private readonly MLContext _ml = new MLContext(seed: 42);
-
+        private List<JobSample> _allJobSamples;
         // Category classifier
         private ITransformer? _categoryModel;
         private PredictionEngine<JobSample, CategoryPrediction>? _catEngine;
@@ -43,6 +43,7 @@ namespace jobscrapper.Services
                 TrainCategoryModel(samples);
                 SaveCategoryModel(modelPath);
             }
+            _allJobSamples = LoadAllJobSamples();
         }
         public List<JobSample> LoadAllJobSamples(string? dataFolder = null)
         {
@@ -301,26 +302,44 @@ namespace jobscrapper.Services
                 return $"No model for category: {category}";
 
             var sample = new JobSample { Question = question, Category = category };
-            var prediction = engine.Predict(sample);
+            AnswerPrediction prediction = engine.Predict(sample);
             return prediction.PredictedLabel ?? "no answer";
         }
 
         public List<MatchResult> PredictMatches(ResumeInput resume, int topN)
         {
-            var category = PredictJobCategory(resume.FullText);
-            var matches = new List<MatchResult>();
+            var resumeTokens = new HashSet<string>(
+         System.Text.RegularExpressions.Regex.Matches(resume.FullText.ToLowerInvariant(), @"\w+")
+             .Select(m => m.Value));
 
-            // Simple matching (expand with real logic)
-            matches.Add(new MatchResult
+            var scoredJobs = new List<(JobSample job, int score)>();
+
+            foreach (var job in _allJobSamples)
             {
-                JobTitle = $"Job in {category}",
-                Company = "Matched Company",
-                Category = category,
-                MatchScore = 0.95f,
-                HiringProbability = "95%"
-            });
+                var jobTokens = new HashSet<string>(
+                    System.Text.RegularExpressions.Regex.Matches(job.Question.ToLowerInvariant(), @"\w+")
+                        .Select(m => m.Value));
 
-            return matches.Take(topN).ToList();
+                int commonWords = resumeTokens.Intersect(jobTokens).Count();
+
+                if (commonWords > 0)
+                    scoredJobs.Add((job, commonWords));
+            }
+
+            var topMatches = scoredJobs
+                .OrderByDescending(x => x.score)
+                .Take(topN)
+                .Select(x => new MatchResult
+                {
+                    JobTitle = x.job.Answer,
+                    Company = "نامشخص", // اگر داری از JSONL بخون
+                    Category = x.job.Category,
+                    MatchScore = (float)x.score,
+                    HiringProbability = $"{(x.score * 10)}%"
+                })
+                .ToList();
+
+            return topMatches;
         }
 
         private static string Normalize(string s) =>
