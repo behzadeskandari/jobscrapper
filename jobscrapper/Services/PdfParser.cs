@@ -56,207 +56,206 @@ using UglyToad.PdfPig.DocumentLayoutAnalysis.TextExtractor;
 namespace JobMatchApi.Services
 {
 
-        public static class PdfParser
+    public static class PdfParser
+    {
+        public static ResumeInput Extract(string pdfPath)
         {
-            /// <summary>
-            /// Extracts the entire text from a PDF and parses structured resume fields.
-            /// </summary>
-            public static ResumeInput Extract(string pdfPath)
+            var rawText = ExtractRawText(pdfPath);
+            var language = DetectLanguage(rawText);
+
+            return language == Language.Persian
+                ? ExtractPersianResume(rawText)
+                : ExtractEnglishResume(rawText);
+        }
+
+        private static string ExtractRawText(string pdfPath)
+        {
+            var sb = new StringBuilder();
+            byte[] pdfBytes = File.ReadAllBytes(pdfPath);
+            using var ms = new MemoryStream(pdfBytes);
+            using var pdf = PdfDocument.Open(ms);
+            foreach (var page in pdf.GetPages())
             {
-                var sb = new StringBuilder();
+                var text = ContentOrderTextExtractor.GetText(page);
+                if (!string.IsNullOrWhiteSpace(text))
+                    sb.AppendLine(text);
+            }
+            return sb.ToString();
+        }
 
-                // Read all bytes first to avoid file locking issues
-                byte[] pdfBytes = File.ReadAllBytes(pdfPath);
+        private enum Language { Persian, English }
 
-                using (var ms = new MemoryStream(pdfBytes))
-                using (var pdf = PdfDocument.Open(ms))
-                {
-                    foreach (var page in pdf.GetPages())
-                    {
-                        // Extract text best suited for Persian/Arabic + RTL PDFs
-                        var text = ContentOrderTextExtractor.GetText(page);
+        private static Language DetectLanguage(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return Language.English;
 
-                        if (!string.IsNullOrWhiteSpace(text))
-                            sb.AppendLine(text);
-                    }
-                }
+            int persianChars = text.Count(c => c >= 0x0600 && c <= 0x06FF);
+            int englishChars = text.Count(c => (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'));
 
-            var rawText = sb.ToString();
+            // اگر بیش از 15 کاراکتر فارسی داشت → فارسی
+            // اگر بیش از 100 کاراکتر انگلیسی داشت و فارسی کم بود → انگلیسی
+            return (persianChars > 15) || (persianChars > englishChars * 0.3)
+                ? Language.Persian
+                : Language.English;
+        }
 
-            // 1. Fix Persian text direction before further processing
+        private static ResumeInput ExtractPersianResume(string rawText)
+        {
             var fixedText = FixPersianTextDirections.FixPersianTextDirection(rawText);
+            var cleanedText = CleanPersianText(fixedText);
 
-            // 2. Clean text (normalize characters, digits, whitespace, etc.)
-            var cleanedText = CleanText(fixedText);
-
-            // 3. Extract fields from cleaned text
             return new ResumeInput
             {
                 FullText = cleanedText,
-                Name = ExtractName(cleanedText),
-                City = ExtractCity(cleanedText),
-                YearsExperience = ExtractYearsExperience(cleanedText) ?? 0,
-                Skills = ExtractSkills(cleanedText),
-                Education = ExtractEducation(cleanedText)
+                Name = ExtractPersianName(cleanedText) ?? "نامشخص",
+                City = ExtractPersianCity(cleanedText) ?? "نامشخص",
+                YearsExperience = ExtractPersianExperience(cleanedText),
+                Skills = ExtractPersianSkills(cleanedText),
+                Education = ExtractPersianEducation(cleanedText) ?? "نامشخص"
             };
         }
 
-            // Normalize text (Persian digits, characters, whitespace)
-            private static string CleanText(string input)
+        private static ResumeInput ExtractEnglishResume(string rawText)
+        {
+            var cleanedText = CleanEnglishText(rawText);
+
+            return new ResumeInput
             {
-                if (string.IsNullOrWhiteSpace(input))
-                    return string.Empty;
-
-                var output = input;
-
-                // Normalize Persian digits
-                output = output
-                    .Replace("۰", "0").Replace("۱", "1").Replace("۲", "2")
-                    .Replace("۳", "3").Replace("۴", "4").Replace("۵", "5")
-                    .Replace("۶", "6").Replace("۷", "7").Replace("۸", "8")
-                    .Replace("۹", "9");
-
-                // Normalize Arabic/Persian characters
-                output = output
-                    .Replace("ي", "ی")
-                    .Replace("ك", "ک")
-                    .Replace("ۀ", "ه")
-                    .Replace("ة", "ه");
-
-                // Replace multiple spaces and trim
-                output = Regex.Replace(output, @"[ \t]+", " ");
-                output = Regex.Replace(output, @"\n{3,}", "\n\n");
-
-                return output.Trim();
-            }
-
-            // Extract name heuristically from typical Persian resume fields
-            private static string ExtractName(string text)
-            {
-                if (string.IsNullOrWhiteSpace(text))
-                    return null;
-
-                var patterns = new[]
-                {
-                @"نام(?: و نام خانوادگی)?:\s*(.+)",
-                @"نام:\s*(.+)",
-                @"نام و نام خانوادگی:\s*(.+)"
+                FullText = cleanedText,
+                Name = ExtractEnglishName(cleanedText) ?? "Unknown",
+                City = ExtractEnglishCity(cleanedText) ?? "Unknown",
+                YearsExperience = ExtractEnglishExperience(cleanedText),
+                Skills = ExtractEnglishSkills(cleanedText),
+                Education = ExtractEnglishEducation(cleanedText) ?? "Unknown"
             };
-
-                foreach (var p in patterns)
-                {
-                    var match = Regex.Match(text, p, RegexOptions.Multiline);
-                    if (match.Success)
-                        return match.Groups[1].Value.Trim();
-                }
-
-                // Fallback: first plausible line (2-4 words, no digits, no emails)
-                var lines = text.Split('\n')
-                                .Select(l => l.Trim())
-                                .Where(l => l.Count(c => char.IsWhiteSpace(c)) >= 1 &&
-                                            l.Length < 60 &&
-                                            !l.Contains("@") &&
-                                            !Regex.IsMatch(l, @"\d"))
-                                .ToList();
-
-                return lines.FirstOrDefault();
-            }
-
-            // Extract city from typical Persian keywords or common city names
-            private static string ExtractCity(string text)
-            {
-                if (string.IsNullOrWhiteSpace(text))
-                    return null;
-
-                var patterns = new[]
-                {
-                @"شهر:\s*(.+)",
-                @"محل سکونت:\s*(.+)",
-                @"استان:\s*(.+)",
-                @"ساکن\s+(.+)"
-            };
-
-                foreach (var p in patterns)
-                {
-                    var match = Regex.Match(text, p);
-                    if (match.Success)
-                        return match.Groups[1].Value.Trim();
-                }
-
-                // Common Iranian cities fallback
-                var cities = new[]
-                {
-                "تهران","شیراز","اصفهان","تبریز","کرج","مشهد","اهواز",
-                "یزد","کرمان","سنندج","زنجان","قزوین","قم","رشت","ساری"
-            };
-
-                foreach (var c in cities)
-                {
-                    if (text.Contains(c))
-                        return c;
-                }
-
-                return null;
-            }
-
-            // Extract years of experience (look for numbers followed by 'سال')
-            private static int? ExtractYearsExperience(string text)
-            {
-                if (string.IsNullOrWhiteSpace(text))
-                    return null;
-
-                var match = Regex.Match(text, @"(\d+)\s*سال", RegexOptions.Multiline);
-
-                if (match.Success && int.TryParse(match.Groups[1].Value, out int years))
-                    return years;
-
-                return null;
-            }
-
-            // Extract skill list by detecting "مهارت‌ها" section and splitting
-            private static List<string> ExtractSkills(string text)
-            {
-                var skills = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-                var match = Regex.Match(text, @"مهارت(?: ها|‌ها)?:([\s\S]+?)(?:\n\n|\r\n\r\n|تحصیلات|سوابق|Skills|Education)", RegexOptions.Multiline);
-
-                if (match.Success)
-                {
-                    var block = match.Groups[1].Value;
-
-                    var items = block
-                        .Split(new[] { ',', '،', '\n', '/', '|' }, StringSplitOptions.RemoveEmptyEntries)
-                        .Select(s => s.Trim())
-                        .Where(s => s.Length > 1);
-
-                    foreach (var item in items)
-                        skills.Add(item);
-                }
-
-                return skills.ToList();
-            }
-
-            // Extract education degree from common Persian keywords
-            private static string ExtractEducation(string text)
-            {
-                var eduPatterns = new[]
-                {
-                @"تحصیلات(?:.+?)(کاردانی|کارشناسی|کارشناسی ارشد|دکترا)",
-                @"مدرک:\s*(.+)",
-                @"Education:\s*(.+)"
-            };
-
-                foreach (var p in eduPatterns)
-                {
-                    var match = Regex.Match(text, p, RegexOptions.Multiline);
-                    if (match.Success)
-                        return match.Groups[1].Value.Trim();
-                }
-
-                return null;
-            }
         }
 
+        // ====================== فارسی ======================
+        private static string CleanPersianText(string input) => CleanText(input, isPersian: true);
+        private static string CleanEnglishText(string input) => CleanText(input, isPersian: false);
+
+        private static string CleanText(string input, bool isPersian)
+        {
+            if (string.IsNullOrWhiteSpace(input)) return string.Empty;
+
+            var text = input
+                .Replace("‌", " ").Replace("\u200C", " ").Replace("\u200B", "")
+                .Replace("\r\n", "\n").Replace("\r", "\n");
+
+            if (isPersian)
+            {
+                text = text
+                    .Replace("۰", "0").Replace("۱", "1").Replace("۲", "2").Replace("۳", "3").Replace("۴", "4")
+                    .Replace("۵", "5").Replace("۶", "6").Replace("۷", "7").Replace("۸", "8").Replace("۹", "9")
+                    .Replace("ي", "ی").Replace("ك", "ک").Replace("ة", "ه").Replace("ۀ", "ه");
+            }
+
+            return Regex.Replace(text, @"\s+", " ").Trim();
+        }
+
+        private static string ExtractPersianName(string text) => ExtractName(text, isPersian: true);
+        private static string ExtractEnglishName(string text) => ExtractName(text, isPersian: false);
+
+        private static string ExtractName(string text, bool isPersian)
+        {
+            var patterns = isPersian
+                ? new[] { @"نام\s*(?:و\s*نام\s*خانوادگی)?\s*[:\-]?\s*([^\n\r]{5,60})", @"^([\u0600-\u06FF]{2,}\s+[\u0600-\u06FF]{2,})" }
+                : new[] { @"Name[:\-]?\s*([A-Za-z\s]{5,60})", @"^[A-Z][a-z]+(?:\s[A-Z][a-z]+)+" };
+
+            foreach (var p in patterns)
+            {
+                var m = Regex.Match(text, p, RegexOptions.Multiline);
+                if (m.Success && m.Groups[1].Success)
+                {
+                    var name = m.Groups[1].Value.Trim();
+                    if (name.Length > 4 && name.Length < 60 && !name.Contains("@"))
+                        return name;
+                }
+            }
+            return null;
+        }
+
+        private static string ExtractPersianCity(string text)
+        {
+            var cities = new[] { "تهران", "مشهد", "اصفهان", "شیراز", "تبریز", "کرج", "اهواز", "قم", "کرمانشاه", "رشت", "ارومیه", "زاهدان", "همدان", "یزد", "اردبیل", "بندرعباس", "اراک", "ایلام", "بجنورد", "بوشهر", "شهرکرد", "بیرجند", "گرگان", "ساری", "سنندج", "قزوین", "کرمان", "خرم‌آباد", "سمنان", "زنجان", "یاسوج" };
+            return cities.FirstOrDefault(text.Contains) ?? null;
+        }
+
+        private static string ExtractEnglishCity(string text)
+        {
+            var cities = new[] { "Tehran", "Mashhad", "Isfahan", "Shiraz", "Tabriz", "Karaj", "Ahvaz", "Qom", "London", "New York", "Berlin", "Toronto", "Dubai", "Istanbul" };
+            return cities.FirstOrDefault(c => text.Contains(c, StringComparison.OrdinalIgnoreCase)) ?? null;
+        }
+
+        private static int ExtractPersianExperience(string text)
+        {
+            var m = Regex.Match(text, @"(\d+|۰|۱|۲|۳|۴|۵|۶|۷|۸|۹)+?\s*(?:سال|years?)", RegexOptions.IgnoreCase);
+            if (m.Success)
+            {
+                var num = Regex.Replace(m.Value, @"[^\d۰-۹]", "");
+                num = num.Replace("۰", "0").Replace("۱", "1").Replace("۲", "2").Replace("۳", "3").Replace("۴", "4")
+                         .Replace("۵", "5").Replace("۶", "6").Replace("۷", "7").Replace("۸", "8").Replace("۹", "9");
+                if (int.TryParse(num, out int y) && y < 50) return y;
+            }
+            return 0;
+        }
+
+        private static int ExtractEnglishExperience(string text)
+        {
+            var m = Regex.Match(text, @"(\d+)\+?\s*(?:years?|yrs?)", RegexOptions.IgnoreCase);
+            return m.Success && int.TryParse(m.Groups[1].Value, out int y) && y < 50 ? y : 0;
+        }
+
+        private static List<string> ExtractPersianSkills(string text)
+        {
+            var skills = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var block = Regex.Match(text, @"مهارت(?:\s*ها|‌ها)?\s*[:\-]?\s*([\s\S]+?)(?:\n\n|تحصیلات|Experience)", RegexOptions.IgnoreCase);
+            if (block.Success)
+            {
+                skills.UnionWith(block.Groups[1].Value
+                    .Split(new[] { ',', '،', '\n', ';', '/', '|', '•' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(s => s.Trim())
+                    .Where(s => s.Length > 1 && s.Length < 50));
+            }
+            if (!skills.Any())
+                skills.UnionWith(new[] { "React", "جاوااسکریپت", ".NET", "SQL", "پایتون", "Git", "Docker" }.Where(s => text.Contains(s)));
+
+            return skills.Take(20).ToList();
+        }
+
+        private static List<string> ExtractEnglishSkills(string text)
+        {
+            var skills = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var block = Regex.Match(text, @"Skills?[:\-]?\s*([\s\S]+?)(?:\n\n|Education|Experience)", RegexOptions.IgnoreCase);
+            if (block.Success)
+            {
+                skills.UnionWith(block.Groups[1].Value
+                    .Split(new[] { ',', '\n', ';', '/', '|', '•' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(s => s.Trim())
+                    .Where(s => s.Length > 1 && s.Length < 50));
+            }
+            if (!skills.Any())
+                skills.UnionWith(new[] { "React", "JavaScript", ".NET", "Python", "SQL", "AWS", "Docker", "Git" }.Where(s => text.Contains(s, StringComparison.OrdinalIgnoreCase)));
+
+            return skills.Take(20).ToList();
+        }
+
+        private static string ExtractPersianEducation(string text)
+        {
+            if (text.Contains("دکتری") || text.Contains("PhD")) return "دکتری";
+            if (text.Contains("کارشناسی ارشد") || text.Contains("Master")) return "کارشناسی ارشد";
+            if (text.Contains("کارشناسی") || text.Contains("Bachelor")) return "کارشناسی";
+            return "نامشخص";
+        }
+
+        private static string ExtractEnglishEducation(string text)
+        {
+            if (text.Contains("PhD") || text.Contains("Doctor")) return "PhD";
+            if (text.Contains("Master") || text.Contains("MSc")) return "Master's Degree";
+            if (text.Contains("Bachelor") || text.Contains("BSc")) return "Bachelor's Degree";
+            return "Unknown";
+        }
+    }
 
 
 }

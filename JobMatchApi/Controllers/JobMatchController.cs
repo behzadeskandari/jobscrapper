@@ -79,46 +79,36 @@ namespace JobMatchApi.Controllers
            [FromForm] ResumeUploadRequest request,
            [FromQuery] int topN = 5)
         {
-            var file = request.File;
+            
 
-            if (file == null || file.Length == 0)
+            if (request.File == null || request.File.Length == 0)
                 return BadRequest("فایلی آپلود نشده است.");
 
-            if (!file.FileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
+            if (!request.File.FileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
                 return BadRequest("فقط فایل PDF مجاز است.");
 
-            if (file.Length > 10 * 1024 * 1024)
-                return BadRequest("حجم فایل بیش از حد مجاز است (حداکثر 10 مگابایت).");
-
-            var tempPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid()}.pdf");
+            var tempPath = Path.GetTempFileName() + ".pdf";
 
             try
             {
-                await using (var stream = System.IO.File.Create(tempPath))
-                {
-                    await file.CopyToAsync(stream);
-                }
+                // ذخیره فایل
+                using (var stream = System.IO.File.Create(tempPath))
+                    await request.File.CopyToAsync(stream);
 
+                // این خط طلایی است — خودش تشخیص می‌ده فارسی یا انگلیسی!
                 var resume = PdfParser.Extract(tempPath);
 
-                if (string.IsNullOrWhiteSpace(resume.FullText) || resume.FullText.Length < 50)
-                    return BadRequest("متن قابل خواندنی از PDF استخراج نشد.");
+                var language = resume.FullText.Any(c => c >= 0x0600 && c <= 0x06FF) ? "فارسی" : "انگلیسی";
 
-                // Get prediction matches (likely returns list of MatchResult with Category info)
-                var matches = _inference.PredictMatches(resume, topN);
-
-                // Load all jobs from data source (adjust the path as needed)
-                var dataFolder = Path.Combine(AppContext.BaseDirectory, "data");
-                var allJobs = _inference.LoadAllJobSamples(dataFolder);
-
-                // Extract categories from match results
-                var matchedCategories = matches.Select(m => m.Category).ToHashSet();
-
-                // Filter jobs by matched categories
-                var filteredJobs = allJobs.Where(job => matchedCategories.Contains(job.Category)).ToList();
-
-                // Take top N jobs (or all if fewer)
-                var topJobs = filteredJobs.Take(topN).ToList();
+                List<MatchResult> matches;
+                if (language == "فارسی")
+                {
+                    matches = _inference.PredictMatchesPersian(resume, topN);
+                }
+                else
+                {
+                    matches = _inference.PredictMatchesEnglish(resume, topN);
+                }
 
                 var preview = resume.FullText.Length > 300
                     ? resume.FullText[..300] + "..."
@@ -127,22 +117,17 @@ namespace JobMatchApi.Controllers
                 return Ok(new
                 {
                     message = "رزومه با موفقیت پردازش شد",
+                    language = resume.FullText.Any(c => c >= 0x0600 && c <= 0x06FF) ? "فارسی" : "English",
                     extracted = new
                     {
-                        name = resume.Name,
-                        city = resume.City,
-                        yearsExperience = resume.YearsExperience,
-                        education = resume.Education,
-                        skills = resume.Skills,
+                        resume.Name,
+                        resume.City,
+                        resume.YearsExperience,
+                        resume.Education,
+                        resume.Skills,
                         textPreview = preview
                     },
-                    jobMatches = topJobs.Select(job => new
-                    {
-                        title = job.Question,
-                        category = job.Category,
-                        description = job.Answer,  // if this contains description or summary
-                        link = ExtractLinkFromAnswer(job.Answer) // optional helper to parse URL from Answer text
-                    })
+                    jobMatches = matches
                 });
             }
             catch (Exception ex)
@@ -151,8 +136,7 @@ namespace JobMatchApi.Controllers
             }
             finally
             {
-                if (System.IO.File.Exists(tempPath))
-                    System.IO.File.Delete(tempPath);
+                if (System.IO.File.Exists(tempPath)) System.IO.File.Delete(tempPath);
             }
         }
 

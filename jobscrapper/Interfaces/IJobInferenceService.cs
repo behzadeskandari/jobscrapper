@@ -11,24 +11,25 @@ namespace jobscrapper.Interfaces
     {
         List<JobSample> LoadAllJobSamples(string path);
         void TrainCategoryModel(List<JobSample> data);
-        void TrainAnswerModels(List<JobSample> data);
+        void TrainPerCategoryModels(List<JobSample> data);  // New: Trains model_*.zip per category
         void SaveCategoryModel(string path);
-        void SaveAnswerModels(string folder);
+        void SavePerCategoryModels(string folder);  // Saves model_*.zip
+        void SaveCategoryAndPerCategoryModels(string folder);  // Combined save
         void LoadCategoryModel(string path);
-        void LoadAnswerModels(string folder);
+        void LoadPerCategoryModels(string folder);  // Loads model_*.zip
         string PredictJobCategory(string question);
         string PredictAnswer(string question);
-
-        void SaveCategoryAndAnswerModels(string folder);
         List<MatchResult> PredictMatches(ResumeInput resume, int topN);
 
-        void TrainPerCategoryModels(List<JobSample> data);  // New: Trains model_*.zip per category
+        void TrainAnswerModels(List<JobSample> data);
+        void SaveAnswerModels(string folder);
+        void LoadAnswerModels(string folder);
 
-        void SavePerCategoryModels(string folder);  // Saves model_*.zip
+        void SaveCategoryAndAnswerModels(string folder);
 
-        void SaveCategoryAndPerCategoryModels(string folder);  // Combined save
 
-        void LoadPerCategoryModels(string folder);  // Loads model_*.zip
+
+
 
 
 
