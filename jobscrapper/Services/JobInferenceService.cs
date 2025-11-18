@@ -348,6 +348,19 @@ namespace jobscrapper.Services
         // ------------------------------------------------------------
         // 1. Load All Persian JSONL Files (Maps JobText to Question)
         // ------------------------------------------------------------
+
+        public JobInferenceService()
+        {
+            var modelPath = Path.Combine(AppContext.BaseDirectory, "Models", "category_classifier.zip");
+            if (File.Exists(modelPath))
+                LoadCategoryModel(modelPath);
+            else
+            {
+                var samples = LoadAllJobSamples();
+                TrainCategoryModel(samples);
+                SaveCategoryModel(modelPath);
+            }
+        }
         public List<JobSample> LoadAllJobSamples(string? dataFolder = null)
         {
             dataFolder ??= Path.Combine(AppContext.BaseDirectory, "Data");

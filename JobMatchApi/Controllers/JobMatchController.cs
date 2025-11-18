@@ -97,12 +97,19 @@ namespace JobMatchApi.Controllers
             if (file.Length > 10 * 1024 * 1024)
                 return BadRequest("حجم فایل بیش از حد مجاز است (حداکثر 10 مگابایت).");
 
-            var tempPath = Path.GetTempFileName() + ".pdf";
+
+            var tempPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid()}.pdf");
 
             try
             {
-                using var stream = System.IO.File.Create(tempPath);
-                await file.CopyToAsync(stream);
+                // 2. Save to temp file
+
+                await using (var stream = System.IO.File.Create(tempPath))
+                {
+                    await file.CopyToAsync(stream);
+                    // Stream is properly flushed and closed after this block
+                }
+
 
                 var resume = PdfParser.Extract(tempPath);
 

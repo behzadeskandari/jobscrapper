@@ -48,9 +48,10 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using jobscrapper;
+using jobscrapper.Models;
 using UglyToad.PdfPig;
 using UglyToad.PdfPig.DocumentLayoutAnalysis.TextExtractor;
-using jobscrapper.Models;
 
 namespace JobMatchApi.Services
 {
@@ -80,18 +81,25 @@ namespace JobMatchApi.Services
                     }
                 }
 
-                var fullText = CleanText(sb.ToString());
+            var rawText = sb.ToString();
 
-                return new ResumeInput
-                {
-                    FullText = fullText,
-                    Name = ExtractName(fullText) ?? "نامشخص",
-                    City = ExtractCity(fullText) ?? "نامشخص",
-                    YearsExperience = ExtractYearsExperience(fullText) ?? 0,
-                    Skills = ExtractSkills(fullText),
-                    Education = ExtractEducation(fullText) ?? "نامشخص"
-                };
-            }
+            // 1. Fix Persian text direction before further processing
+            var fixedText = FixPersianTextDirections.FixPersianTextDirection(rawText);
+
+            // 2. Clean text (normalize characters, digits, whitespace, etc.)
+            var cleanedText = CleanText(fixedText);
+
+            // 3. Extract fields from cleaned text
+            return new ResumeInput
+            {
+                FullText = cleanedText,
+                Name = ExtractName(cleanedText),
+                City = ExtractCity(cleanedText),
+                YearsExperience = ExtractYearsExperience(cleanedText) ?? 0,
+                Skills = ExtractSkills(cleanedText),
+                Education = ExtractEducation(cleanedText)
+            };
+        }
 
             // Normalize text (Persian digits, characters, whitespace)
             private static string CleanText(string input)
